@@ -1,0 +1,9 @@
+duckdb
+pandas
+numpy
+matplotlib
+scipy
+statsmodels
+pyarrow
+dowhy
+jupyter

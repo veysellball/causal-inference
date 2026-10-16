@@ -125,3 +125,65 @@ def build_raw_table(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     for col in ["purchase_date", "delivered_date", "review_created"]:
         df[col] = pd.to_datetime(df[col])
     return df
+
+
+REGIONS = {
+    "N":  ["AC", "AM", "AP", "PA", "RO", "RR", "TO"],
+    "NE": ["AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE"],
+    "CO": ["DF", "GO", "MS", "MT"],
+    "SE": ["ES", "MG", "RJ", "SP"],
+    "S":  ["PR", "RS", "SC"],
+}
+STATE_TO_REGION = {s: r for r, states in REGIONS.items() for s in states}
+
+NUMERIC_CONFOUNDERS = [
+    "log_distance", "same_state", "promised_days", "log_freight", "freight_share",
+    "log_price", "log_weight", "n_items",
+    "seller_prior_late_rate", "seller_prior_review", "log_seller_prior_orders", "seller_is_new",
+]
+
+
+def _safe(name: str) -> str:
+    return re.sub(r"\W+", "_", name).strip("_").lower()
+
+
+def prepare(raw: pd.DataFrame, top_categories: int = 15) -> tuple[pd.DataFrame, list[str]]:
+    """Filter to the analysis population and encode confounders.
+    Returns the table and the full list of adjustment columns."""
+    df = raw[(raw["n_sellers"] == 1)
+             & raw["review_score"].notna()
+             & raw["distance_km"].notna()].copy()
+
+    df["is_late"] = df["is_late"].astype(bool)
+    df["good_review"] = df["good_review"].astype(int)
+    df["seller_is_new"] = (df["seller_prior_orders"] == 0).astype(int)
+    for col in ["seller_prior_late_rate", "seller_prior_review"]:
+        df[col] = df[col].fillna(df[col].mean())      # new sellers: neutral value + the flag above
+    df["weight_g"] = df["weight_g"].fillna(df["weight_g"].median())
+
+    df["log_distance"] = np.log1p(df["distance_km"])
+    df["log_freight"] = np.log1p(df["freight"])
+    df["log_price"] = np.log1p(df["price"])
+    df["log_weight"] = np.log1p(df["weight_g"])
+    df["log_seller_prior_orders"] = np.log1p(df["seller_prior_orders"])
+    df["freight_share"] = df["freight"] / (df["price"] + df["freight"])
+    df["same_state"] = df["same_state"].astype(int)
+
+    df["region"] = df["customer_state"].map(STATE_TO_REGION)
+    top = df["category"].value_counts().index[:top_categories]
+    df["category_grp"] = df["category"].where(df["category"].isin(top), "other")
+    df["purchase_month"] = df["purchase_date"].dt.strftime("%Y_%m")
+
+    dummies = pd.get_dummies(df[["region", "category_grp", "purchase_month"]],
+                             prefix=["region", "cat", "month"], drop_first=True, dtype=int)
+    dummies.columns = [_safe(c) for c in dummies.columns]
+    df = pd.concat([df, dummies], axis=1)
+
+    confounders = NUMERIC_CONFOUNDERS + list(dummies.columns)
+    return df, confounders
+
+
+def build_dot(confounders: list[str], treatment: str, outcome: str) -> str:
+    """Backdoor-adjustment graph for DoWhy: every confounder → T and → Y, plus T → Y."""
+    edges = [f"{c} -> {treatment}; {c} -> {outcome};" for c in confounders]
+    return "digraph {" + " ".join(edges) + f" {treatment} -> {outcome};" + "}"

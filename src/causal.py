@@ -187,3 +187,17 @@ def build_dot(confounders: list[str], treatment: str, outcome: str) -> str:
     """Backdoor-adjustment graph for DoWhy: every confounder → T and → Y, plus T → Y."""
     edges = [f"{c} -> {treatment}; {c} -> {outcome};" for c in confounders]
     return "digraph {" + " ".join(edges) + f" {treatment} -> {outcome};" + "}"
+
+
+
+def smd(df: pd.DataFrame, cols: list[str], treat: str, weights=None) -> pd.Series:
+    """Standardized mean difference (treated − control) / pooled SD, optionally weighted."""
+    w = np.ones(len(df)) if weights is None else np.asarray(weights)
+    t = df[treat].to_numpy(bool)
+    out = {}
+    for c in cols:
+        x = df[c].to_numpy(float)
+        m1, m0 = np.average(x[t], weights=w[t]), np.average(x[~t], weights=w[~t])
+        v1, v0 = x[t].var(), x[~t].var()            # unweighted SDs as the common yardstick
+        out[c] = (m1 - m0) / np.sqrt((v1 + v0) / 2) if v1 + v0 > 0 else 0.0
+    return pd.Series(out)

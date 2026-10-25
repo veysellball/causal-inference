@@ -201,3 +201,24 @@ def smd(df: pd.DataFrame, cols: list[str], treat: str, weights=None) -> pd.Serie
         v1, v0 = x[t].var(), x[~t].var()            # unweighted SDs as the common yardstick
         out[c] = (m1 - m0) / np.sqrt((v1 + v0) / 2) if v1 + v0 > 0 else 0.0
     return pd.Series(out)
+
+
+def ipw_weights(t: np.ndarray, ps: np.ndarray, target: str = "att") -> np.ndarray:
+    if target == "att":
+        return np.where(t, 1.0, ps / (1 - ps))
+    if target == "ate":
+        return np.where(t, 1 / ps, 1 / (1 - ps))
+    raise ValueError(target)
+
+
+def weighted_diff(y: np.ndarray, t: np.ndarray, w: np.ndarray) -> float:
+    return np.average(y[t], weights=w[t]) - np.average(y[~t], weights=w[~t])
+
+
+def effective_sample_size(w: np.ndarray) -> float:
+    return w.sum() ** 2 / (w ** 2).sum()
+
+
+def aipw_att(y: np.ndarray, t: np.ndarray, ps: np.ndarray, m0: np.ndarray) -> float:
+    """Doubly robust ATT: IPW applied to the residuals of an outcome model fitted on controls."""
+    return weighted_diff(y - m0, t, ipw_weights(t, ps, "att"))
